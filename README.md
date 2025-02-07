@@ -12,8 +12,7 @@ This module provides a method of installing an OpenShift cluster on AWS personal
 * Stringify the pull secret using a tool like JSON Formatter: https://jsonformatter.org/json-stringify-online
 * Set the `pull_secret` variable to the stringified JSON.
 * Set the `base_infra_workspace_name` variable to the name of the HCP Terraform workspace containing the personal base infrastructure
-* Authenticate with doormat and prepare credentials in your local environment for your personal AWS account
-* Change into the `openshift-cluster` directory and apply the configuration.
+* Deploy
 ```
 terraform init
 terraform apply
