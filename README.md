@@ -20,7 +20,7 @@ terraform apply
 * Configure the `oc` client
 ```
 terraform output -r kubeconfig > kubeconfig
-export KUBECONFIG=$(kubeconfig)
+export KUBECONFIG=kubeconfig
 ```
 
 ## Tear Down
