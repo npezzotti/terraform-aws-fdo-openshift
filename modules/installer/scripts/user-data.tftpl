@@ -1,0 +1,101 @@
+#!/bin/bash
+
+set -eo pipefail
+
+echo "Installing required packages..."
+dnf install -y \
+  https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm \
+  unzip \
+  jq
+
+systemctl enable amazon-ssm-agent
+systemctl start amazon-ssm-agent
+
+echo "Setting up AWS CLI..."
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
+unzip /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install
+
+OPENSHIFT_INSTALLER_DIR=/opt/openshift-installer
+
+echo "Creating OpenShift installer directories..."
+mkdir -p $${OPENSHIFT_INSTALLER_DIR}/clusterconfig
+
+echo "Downloading and extracting OpenShift installer..."
+curl -sSLo /tmp/openshift-install-linux.tar.gz https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-install-linux.tar.gz
+tar -xvf /tmp/openshift-install-linux.tar.gz -C $${OPENSHIFT_INSTALLER_DIR}
+
+echo "Downloading and extracting OpenShift CLI tools..."
+curl -sSLo /tmp/openshift-client-linux.tar.gz https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-client-linux.tar.gz
+tar -xvf /tmp/openshift-client-linux.tar.gz -C /tmp
+mv /tmp/{oc,kubectl} /usr/bin/
+
+echo "Creating install config file..."
+cat <<EOF > $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/install-config.yaml
+${install_config}
+EOF
+
+echo "Generating pull secret file..."
+cat <<EOF > $${HOME}/.pull-secret
+${pull_secret}
+EOF
+
+RELEASE_IMAGE=$($${OPENSHIFT_INSTALLER_DIR}/openshift-install version | awk '/release image/ {print $3}')
+CCO_IMAGE=$(oc adm release info --image-for='cloud-credential-operator' $${RELEASE_IMAGE} --registry-config $${HOME}/.pull-secret)
+CCOCTL_BIN_NAME=ccoctl.rhel9
+
+echo "Extracting ccoctl utility from image..."
+oc image extract $${CCO_IMAGE} \
+  --confirm \
+  --registry-config $${HOME}/.pull-secret \
+  --path /usr/bin/$${CCOCTL_BIN_NAME}:$${OPENSHIFT_INSTALLER_DIR}
+
+chmod 775 $${OPENSHIFT_INSTALLER_DIR}/$${CCOCTL_BIN_NAME}
+
+echo "Extracting credentials requests from image..."
+oc adm release extract \
+  --from=$${RELEASE_IMAGE} \
+  --credentials-requests \
+  --included \
+  --install-config=$${OPENSHIFT_INSTALLER_DIR}/clusterconfig/install-config.yaml \
+  --to=$${OPENSHIFT_INSTALLER_DIR}/clusterconfig/cred-requests
+
+echo "Creating credentials requests..."
+$${OPENSHIFT_INSTALLER_DIR}/ccoctl.rhel9 aws create-all \
+  --name=${cluster_name} \
+  --region=${region} \
+  --credentials-requests-dir=$${OPENSHIFT_INSTALLER_DIR}/clusterconfig/cred-requests \
+  --output-dir=$${OPENSHIFT_INSTALLER_DIR}/clusterconfig/_ccoctl
+
+echo "Creating manifests..."
+$${OPENSHIFT_INSTALLER_DIR}/openshift-install create manifests --dir $${OPENSHIFT_INSTALLER_DIR}/clusterconfig
+
+echo "Removing unwanted manifests..."
+rm -f $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/openshift/99_openshift-cluster-api_worker-machineset-*.yaml \
+  $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/openshift/99_openshift-machine-api_master-control-plane-machine-set.yaml \
+  $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/openshift/99_openshift-cluster-api_master-machines-*.yaml
+
+echo "Copying credentials manifests to config dir..."
+cp $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/_ccoctl/manifests/* $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/manifests/
+cp -a $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/_ccoctl/tls $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/
+
+echo "Creating ignition configs..."
+$${OPENSHIFT_INSTALLER_DIR}/openshift-install create ignition-configs --dir $${OPENSHIFT_INSTALLER_DIR}/clusterconfig
+
+echo "Uploaded ignition files to S3..."
+/usr/local/bin/aws s3 cp $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/bootstrap.ign s3://${s3_bucket_name}/bootstrap.ign
+/usr/local/bin/aws s3 cp $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/master.ign s3://${s3_bucket_name}/master.ign
+/usr/local/bin/aws s3 cp $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/worker.ign s3://${s3_bucket_name}/worker.ign
+
+echo "Generating cluster outputs..."
+INFRA_ID=$(jq -r '.infraID' $${OPENSHIFT_INSTALLER_DIR}/clusterconfig/metadata.json)
+KUBEADM_PASSWORD=$(<$${OPENSHIFT_INSTALLER_DIR}/clusterconfig/auth/kubeadmin-password)
+KUBECONFIG=$(<$${OPENSHIFT_INSTALLER_DIR}/clusterconfig/auth/kubeconfig)
+
+jq -n \
+  --arg infra_id "$${INFRA_ID}" \
+  --arg kubeadmin_password "$${KUBEADM_PASSWORD}" \
+  --arg kubeconfig "$${KUBECONFIG}" \
+  '{"infra_id":$infra_id,"kubeadmin_password":$kubeadmin_password,"kubeconfig":$kubeconfig}' > $${OPENSHIFT_INSTALLER_DIR}/cluster_outputs
+
+chmod 644 $${OPENSHIFT_INSTALLER_DIR}/cluster_outputs
