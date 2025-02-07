@@ -20,47 +20,17 @@ terraform apply
 ```
 * Once complete, start a session on the installer node by running the following command.
 ```
-doormat session -a <ACCOUNT_NAME> -r us-east-1 
-```
 * Configure the `oc` client
 ```
-export KUBECONFIG=/opt/openshift-installer/clusterconfig/auth/kubeconfig
-```
-* Run the following command to monitor the bootsrapping process.
-```
-/opt/openshift-installer/openshift-install wait-for bootstrap-complete --dir /opt/openshift-installer/clusterconfig --log-level info
-```
-* Wait until the command indicates the bootstrapping process is complete.
-* Run `oc get nodes` to confirm the three master nodes are in a `Ready` status.
-* Each of the two worker nodes will create a pairs of certificate signing requests when they come online (a client request and a server request). Approve the client requests with the following command. It should print the IDs of two CSRs- monitor the output of `oc get csr` until the CSRs are both created and run it again.
-```
-oc get csr -o go-template='{{range .items}}{{if not .status}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' | xargs --no-run-if-empty oc adm certificate approve
-```
-* Run the command again to approve the pair of server CSRs.
-* Run the following command to monitor the OpenShift installation until completion.
-```
-/opt/openshift-installer/openshift-install wait-for install-complete --dir /opt/openshift-installer/clusterconfig --log-level info
-```
-* The command will print the OpenShift console URL and login credentials upon complete. Use these to access and explore the OpenShift console.
-* Change into the `terraform-enterprise` directory
-* Run the following commands to apply the configuration.
-```
-terraform init
-terraform apply
+terraform output -r kubeconfig > kubeconfig
+export KUBECONFIG=$(kubeconfig)
 ```
 
 ## Tear Down
 
-The OpenShift Installer program creates some AWS resources outside of Terraform so, 
-
-* Start a session on the installer node and run the following command
-```
-/opt/openshift-installer/openshift-install destroy cluster --dir /opt/openshift-installer/clusterconfig --log-level info
-```
-
 * Destroy the infrastructure
 ```
-
+terraform destroy
 ```
 
 ## Architectural Overview
