@@ -17,8 +17,6 @@ This module provides a method of installing an OpenShift cluster on AWS personal
 terraform init
 terraform apply
 ```
-* Once complete, start a session on the installer node by running the following command.
-```
 * Configure the `oc` client
 ```
 terraform output -r kubeconfig > kubeconfig
